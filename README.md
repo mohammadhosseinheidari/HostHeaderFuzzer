@@ -1,153 +1,121 @@
 # Host Header Fuzzer
 
-An advanced Python-based script for performing **Host Header Fuzzing** using the `ffuf` tool. This script filters for HTTP 200 OK responses and ensures efficiency by avoiding redundant downloads of the wordlist. It also supports merging custom subdomains into the fuzzing process. 
+Host Header Fuzzer is a Python-based tool that leverages [ffuf](https://github.com/ffuf/ffuf) to fuzz HTTP Host headers for security testing. It supports static wordlists and subdomain enumeration, enabling you to identify potential vulnerabilities and misconfigurations.
 
 ## Features
 
-- **Automated Wordlist Management**: Downloads a default wordlist or uses a custom one.
-- **Dynamic Wordlist Cleaning**: Cleans and combines wordlists to avoid redundant entries.
-- **Subdomain Support**: Integrates subdomains from a user-provided file into the fuzzing process.
-- **HTTP 200 Filtering**: Filters results to display only valid HTTP 200 responses.
-- **Customizable User-Agent**: Uses a realistic User-Agent for HTTP requests.
-- **Ease of Use**: Simple CLI interface for straightforward execution.
+- **Automated Fuzzing**: Uses `ffuf` to fuzz target URLs with custom Host headers.
+- **Static Wordlist Support**: Fuzz with a predefined static wordlist.
+- **Subdomain Discovery**: Enumerate subdomains with wordlist-based fuzzing.
+- **Customizable Options**: Supports user-defined wordlists, match codes, and ffuf options.
+- **Result Consolidation**: Merges multiple fuzzing results into a single JSON file.
+- **Error Handling**: Gracefully handles issues with wordlist downloads, ffuf execution, and result parsing.
 
 ## Requirements
 
-- Python 3.6+
-- `ffuf` (fuzzing tool) installed and available in the system's PATH
-- `wget` (for downloading wordlists)
-- Required Python libraries: `argparse`, `os`, `re`, `subprocess`
+- Python 3.7+
+- [ffuf](https://github.com/ffuf/ffuf) installed and available in PATH
+- `requests` Python library (install with `pip install requests`)
 
 ## Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/<your-username>/host-header-fuzzer.git
+   git clone https://github.com/your-username/host-header-fuzzer.git
    cd host-header-fuzzer
    ```
 
-2. Ensure `ffuf` is installed:
+2. Install Python dependencies:
+   ```bash
+   pip install requests
+   ```
+
+3. Ensure `ffuf` is installed and accessible:
    ```bash
    sudo apt install ffuf
    ```
 
-3. (Optional) Install `wget` if not already available:
-   ```bash
-   sudo apt install wget
-   ```
-
-4. Make the script executable:
-   ```bash
-   chmod +x host_header_fuzzer.py
-   ```
-
 ## Usage
 
-Run the script from the command line with the following options:
-
 ```bash
-python3 host_header_fuzzer.py <target_url> [--wordlist <wordlist_url>] [--subdomains <subdomains_file>]
+python host_header_fuzzer.py -u <TARGET_URL> [OPTIONS]
 ```
 
-### Positional Arguments:
+### Arguments
 
-- **`target_url`**: The target URL for fuzzing (e.g., `https://example.com`).
-
-### Optional Arguments:
-
-- **`--wordlist`**: URL of the main wordlist file. Defaults to the following:
-  ```
-  https://raw.githubusercontent.com/cujanovic/Virtual-host-wordlist/master/virtual-host-wordlist.txt
-  ```
-- **`--subdomains`**: Path to a file containing a list of subdomains (one per line). 
+| Option                  | Description                                                                                       | Default                                |
+|-------------------------|---------------------------------------------------------------------------------------------------|----------------------------------------|
+| `-u, --url`             | **Required.** Target URL for fuzzing.                                                            | N/A                                    |
+| `-sw, --static-wordlist`| Path to static wordlist file for Host header fuzzing.                                             | Downloaded automatically if not set.   |
+| `-dw, --subdomain-wordlist` | Path to subdomain wordlist file for subdomain fuzzing.                                         | None                                   |
+| `-mc, --match-codes`    | HTTP status codes to match. Comma-separated values.                                               | `200,204,301,302,307,308,401,403,405,500` |
+| `-o, --output`          | Output file path (without extension) to save results.                                            | None                                   |
+| `--ffuf-path`           | Path to the `ffuf` binary.                                                                       | `ffuf`                                 |
+| `--ffuf-options`        | Additional options to pass to `ffuf`.                                                            | None                                   |
+| `-v, --verbose`         | Enable debug logging for more detailed output.                                                   | Disabled                               |
 
 ### Example Commands
 
-1. **Basic Fuzzing with Default Wordlist**:
+1. **Basic Fuzzing**:
    ```bash
-   python3 host_header_fuzzer.py https://example.com
+   python host_header_fuzzer.py -u https://example.com
    ```
 
-2. **Fuzzing with a Custom Wordlist**:
+2. **Using a Static Wordlist**:
    ```bash
-   python3 host_header_fuzzer.py https://example.com --wordlist https://example.com/custom-wordlist.txt
+   python host_header_fuzzer.py -u https://example.com -sw /path/to/static_wordlist.txt
    ```
 
-3. **Fuzzing with Subdomains File**:
+3. **Subdomain Enumeration**:
    ```bash
-   python3 host_header_fuzzer.py https://example.com --subdomains subdomains.txt
+   python host_header_fuzzer.py -u https://example.com -dw /path/to/subdomain_wordlist.txt
    ```
 
-## How It Works
+4. **Custom Match Codes**:
+   ```bash
+   python host_header_fuzzer.py -u https://example.com -mc 200,404
+   ```
 
-1. **Wordlist Download**:
-   - The script downloads the default wordlist if no custom wordlist is provided.
-   - If the default wordlist already exists locally, it skips the download.
+5. **Save Results to File**:
+   ```bash
+   python host_header_fuzzer.py -u https://example.com -o results
+   ```
 
-2. **Wordlist Cleaning**:
-   - Removes redundant suffixes (e.g., `.%s`) from the downloaded wordlist.
+6. **Verbose Debugging**:
+   ```bash
+   python host_header_fuzzer.py -u https://example.com -v
+   ```
 
-3. **Wordlist Combination**:
-   - Merges the cleaned wordlist with subdomains from the user-provided file (if available).
-   - Appends domain-specific entries for better fuzzing results.
+## Output
 
-4. **Fuzzing Execution**:
-   - Uses `ffuf` for fuzzing with the combined wordlist.
-   - Filters results to show only HTTP 200 responses.
+- Results are consolidated into a single JSON file (e.g., `results_final.json`).
+- Each result contains the response status code, content length, and the Host header used.
 
-5. **Output**:
-   - Displays valid HTTP 200 responses in real-time.
+## Wordlist Download
 
-## Dependencies
+If no static wordlist is provided, the script will automatically download the default wordlist from:
+[Virtual-host-wordlist](https://raw.githubusercontent.com/cujanovic/Virtual-host-wordlist/master/virtual-host-wordlist.txt).
 
-The following Python libraries are used in the script:
+The downloaded file will be saved as `static_wordlist_cleaned.txt` in the script directory.
 
-- **argparse**: For parsing command-line arguments.
-- **os**: For file and path management.
-- **re**: For regex-based wordlist cleaning.
-- **subprocess**: For executing system commands (e.g., `wget` and `ffuf`).
+## Error Handling
 
-## Example Output
-
-```plaintext
-[+] Using existing wordlist: base_wordlist.txt
-[+] Cleaning the downloaded wordlist...
-[+] Creating combined wordlist...
-[+] Combined wordlist created at 'combined_wordlist.txt'.
-[+] Starting Host Header Fuzzing with ffuf and filtering for HTTP 200 responses...
-https://example.com [200] Size: 1234 Words: 567 Lines: 89
-https://admin.example.com [200] Size: 4321 Words: 765 Lines: 98
-```
-
-## Troubleshooting
-
-1. **`ffuf` Not Found**:
-   - Ensure `ffuf` is installed and available in your system's PATH.
-   - Install using `sudo apt install ffuf`.
-
-2. **Wordlist Download Fails**:
-   - Ensure `wget` is installed.
-   - Check your internet connection or the availability of the wordlist URL.
-
-3. **Permission Errors**:
-   - Run the script with sufficient permissions (e.g., use `sudo` if necessary).
-
-4. **Subdomains File Not Found**:
-   - Verify the file path for the `--subdomains` option.
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- **ffuf**: [ffuf GitHub Repository](https://github.com/ffuf/ffuf)
-- **Virtual Host Wordlist**: [cujanovic/Virtual-host-wordlist](https://github.com/cujanovic/Virtual-host-wordlist)
+- **Missing `ffuf`**: The script exits if `ffuf` is not installed or accessible.
+- **Wordlist Download Issues**: The script logs an error if the default wordlist cannot be downloaded.
+- **Invalid URLs**: The script validates URLs to ensure proper formatting.
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request if you'd like to contribute to the project.
+Contributions are welcome! Feel free to open an issue or submit a pull request.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
 
 ## Disclaimer
 
-This tool is intended for educational and legal security testing purposes only. The author is not responsible for any misuse of this tool.
+This tool is intended for authorized security testing only. Misuse of this tool may result in legal consequences. Ensure you have proper authorization before using it.
+
+## Contact
+
+For questions or support, feel free to contact: [your-email@example.com]

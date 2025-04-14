@@ -116,6 +116,4 @@ This project is licensed under the [MIT License](LICENSE).
 
 This tool is intended for authorized security testing only. Misuse of this tool may result in legal consequences. Ensure you have proper authorization before using it.
 
-## Contact
 
-For questions or support, feel free to contact: [your-email@example.com]

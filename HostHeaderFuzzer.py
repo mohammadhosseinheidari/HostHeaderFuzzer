@@ -1,158 +1,218 @@
-import subprocess
 import argparse
-import re
+import logging
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import json
+from typing import Optional, Union, List, Dict, Any, Set, Tuple
+from urllib.parse import urlparse
+
+try:
+    import requests
+except ImportError:
+    print("ERROR: 'requests' library not found. Please install it using: pip install requests", file=sys.stderr)
+    sys.exit(1)
+
+# --- Configuration ---
+DEFAULT_STATIC_WORDLIST_URL = "https://raw.githubusercontent.com/cujanovic/Virtual-host-wordlist/master/virtual-host-wordlist.txt"
+DEFAULT_WORDLIST_FILENAME = "static_wordlist_cleaned.txt"
+DEFAULT_FFUF_PATH = "ffuf"
+DOWNLOAD_USER_AGENT = "HostHeaderFuzzerScript/1.0"
+DEFAULT_MATCH_CODES = "200,204,301,302,307,308,401,403,405,500"
+
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.ERROR,
+    format="%(message)s",
+)
+log = logging.getLogger(__name__)
 
 class HostHeaderFuzzer:
-    """
-    A sophisticated class for performing Host Header Fuzzing using the ffuf tool,
-    specifically filtering for HTTP 200 OK responses and avoiding redundant downloads.
-    """
+    def __init__(
+        self,
+        target_url: str,
+        static_wordlist: Optional[str] = None,
+        subdomain_wordlist: Optional[str] = None,
+        ffuf_path: str = DEFAULT_FFUF_PATH,
+        output_file: Optional[str] = None,
+        ffuf_options: str = "",
+        match_codes: str = DEFAULT_MATCH_CODES,
+    ):
+        self.target_url = self._validate_url(target_url)
+        parsed_url = urlparse(self.target_url)
+        self.target_domain = parsed_url.netloc.split(":")[0]
 
-    def __init__(self, target_url, wordlist_url, subdomains_file=None):
-        """
-        Initializes the HostHeaderFuzzer instance.
+        self.static_wordlist_path = static_wordlist
+        self.subdomain_wordlist_path = subdomain_wordlist
+        self.ffuf_path = ffuf_path
+        self.final_output_path = output_file
+        self.ffuf_options = ffuf_options
+        self.match_codes_str = match_codes
 
-        Args:
-            target_url (str): The target URL for fuzzing.
-            wordlist_url (str): The URL of the main wordlist file.
-            subdomains_file (str, optional): Path to the file containing a list of subdomains (one per line).
-                                             Defaults to None.
-        """
-        self.target_url = target_url
-        self.wordlist_url = wordlist_url
-        self.subdomains_file = subdomains_file
-        self.base_wordlist_file = "base_wordlist.txt"
-        self.cleaned_wordlist_file = "cleaned_wordlist.txt"
-        self.combined_wordlist_file = "combined_wordlist.txt"
+        self._temp_ffuf_output_files: List[str] = []
 
-    def _download_wordlist(self):
-        """
-        Downloads the main wordlist from the given URL if it doesn't already exist.
-        """
-        if self.wordlist_url == "https://raw.githubusercontent.com/cujanovic/Virtual-host-wordlist/master/virtual-host-wordlist.txt" and os.path.exists(self.base_wordlist_file):
-            print(f"[+] Using existing wordlist: {self.base_wordlist_file}")
-            return self.base_wordlist_file
-        else:
-            print(f"[+] Downloading wordlist from: {self.wordlist_url}")
-            try:
-                subprocess.run(["wget", "-O", self.base_wordlist_file, self.wordlist_url], check=True, capture_output=True)
-                return self.base_wordlist_file
-            except subprocess.CalledProcessError as e:
-                print(f"[-] Error downloading wordlist: {e}")
-                return None
+    def _validate_url(self, url: str) -> str:
+        if not url.startswith(("http://", "https://")):
+            url = f"http://{url}"
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            sys.exit(1)
+        return url
 
-    def _clean_wordlist(self, base_wordlist_file):
-        """
-        Removes the '.%s' suffix from each line of the downloaded wordlist.
-        """
-        print("[+] Cleaning the downloaded wordlist...")
-        cleaned_lines = []
+    def _check_ffuf(self) -> str:
+        path = shutil.which(self.ffuf_path)
+        if not path:
+            sys.exit(1)
+        return path
+
+    def _download_default_wordlist(self) -> Optional[str]:
+        save_path = os.path.join(os.path.dirname(__file__), DEFAULT_WORDLIST_FILENAME)
+        if os.path.exists(save_path):
+            return save_path
+
         try:
-            with open(base_wordlist_file, "r") as infile:
-                for line in infile:
-                    cleaned_line = re.sub(r'\.%s$', '', line.strip())
-                    cleaned_lines.append(cleaned_line)
-            with open(self.cleaned_wordlist_file, "w") as outfile:
-                for line in cleaned_lines:
-                    outfile.write(f"{line}\n")
-            return self.cleaned_wordlist_file
-        except FileNotFoundError:
-            print(f"[-] Base wordlist file '{base_wordlist_file}' not found for cleaning.")
+            response = requests.get(DEFAULT_STATIC_WORDLIST_URL, headers={"User-Agent": DOWNLOAD_USER_AGENT}, timeout=30)
+            response.raise_for_status()
+
+            cleaned_lines = [line.replace(".%s", "").strip() for line in response.text.splitlines() if line.strip()]
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(cleaned_lines))
+            return save_path
+        except Exception as e:
+            print(f"Error downloading wordlist: {e}")
             return None
 
-    def _generate_combined_wordlist(self, cleaned_wordlist_file):
-        """
-        Generates a combined wordlist including the cleaned wordlist, domain appended versions, and provided subdomains.
-        """
-        print("[+] Creating combined wordlist...")
-        with open(self.combined_wordlist_file, "w") as outfile:
-            if cleaned_wordlist_file:
-                with open(cleaned_wordlist_file, "r") as infile:
-                    for line in infile:
-                        word = line.strip()
-                        outfile.write(f"{word}\n")
-                        outfile.write(f"{word}.{self.target_url.split('://')[-1]}\n") # Append domain
-
-            if self.subdomains_file:
-                try:
-                    with open(self.subdomains_file, "r") as infile:
-                        for line in infile:
-                            subdomain = line.strip()
-                            outfile.write(f"{subdomain}\n")
-                except FileNotFoundError:
-                    print(f"[-] Subdomains file '{self.subdomains_file}' not found.")
-
-        if self.base_wordlist_file:
-            subprocess.run(["rm", self.base_wordlist_file], check=False) # Remove base wordlist file
-        if self.cleaned_wordlist_file:
-            subprocess.run(["rm", self.cleaned_wordlist_file], check=False) # Remove cleaned wordlist file
-
-        print(f"[+] Combined wordlist created at '{self.combined_wordlist_file}'.")
-        return self.combined_wordlist_file
-
-    def run_fuzzing(self):
-        """
-        Executes the fuzzing process using the ffuf tool and filters results for HTTP 200 OK responses.
-        """
-        base_wordlist = self._download_wordlist()
-        if not base_wordlist and not self.subdomains_file:
-            print("[-] No wordlist available for fuzzing.")
-            return
-
-        cleaned_wordlist = self._clean_wordlist(base_wordlist)
-        if not cleaned_wordlist and not self.subdomains_file:
-            print("[-] Error cleaning the wordlist.")
-            return
-
-        combined_wordlist = self._generate_combined_wordlist(cleaned_wordlist)
-        if not combined_wordlist:
-            print("[-] Error creating combined wordlist.")
-            return
-
-        print("[+] Starting Host Header Fuzzing with ffuf and filtering for HTTP 200 responses...")
-        command = [
-            "ffuf",
-            "-w", combined_wordlist,
+    def _build_ffuf_command(self, mode: str, wordlist: str, ffuf_exec: str) -> Tuple[List[str], Optional[str]]:
+        cmd = [
+            ffuf_exec,
             "-u", self.target_url,
-            "-H", "host: FUZZ",
-            "-H", "User-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X x.y; rv:42.0) Gecko/20100101 Firefox/42.0",
-            "-fs", "0"  # Filter out responses with size 0 (often errors)
+            "-w", wordlist,
+            "-mc", self.match_codes_str,
+            "-s"  # Silent output: فقط نتایج
         ]
 
-        try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            while True:
-                output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
-                    break
-                if output:
-                    # Check if the line contains "[200]" indicating an HTTP 200 response
-                    if "[200]" in output:
-                        print(output.strip())
-            _, stderr = process.communicate()
-            if stderr:
-                print(f"[-] ffuf errors: {stderr}")
+        host_header = {
+            "static": "Host: FUZZ",
+            "static_append": f"Host: FUZZ.{self.target_domain}",
+            "subdomain": "Host: FUZZ",
+        }.get(mode)
 
-        except FileNotFoundError:
-            print("[-] Error: ffuf command not found. Please ensure ffuf is installed and in your system's PATH.")
+        if not host_header:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        cmd.extend(["-H", host_header])
+
+        temp_output = None
+        if self.final_output_path:
+            temp_output = f"{self.final_output_path}_{mode}.json"
+            cmd.extend(["-o", temp_output, "-of", "json"])
+
+        if self.ffuf_options:
+            extra_opts = [opt for opt in self.ffuf_options.split() if opt not in ("-mc", "-o", "-of", "-s")]
+            if extra_opts:
+                cmd.extend(extra_opts)
+
+        return cmd, temp_output
+
+    def _run_ffuf(self, cmd: List[str], temp_out: Optional[str]):
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if proc.stdout:
+                for line in proc.stdout:
+                    sys.stdout.write(line)
+            proc.wait()
+            if proc.returncode == 0 and temp_out and os.path.getsize(temp_out) > 0:
+                self._temp_ffuf_output_files.append(temp_out)
         except Exception as e:
-            print(f"[-] An unexpected error occurred: {e}")
-        finally:
-            subprocess.run(["rm", self.combined_wordlist_file], check=False) # Remove combined wordlist file
+            print(f"Error running ffuf: {e}")
+
+    def _consolidate_results(self):
+        if not self.final_output_path or not self._temp_ffuf_output_files:
+            return
+
+        results: List[Dict[str, Any]] = []
+        seen: Set[Tuple[int, int]] = set()
+
+        for file in self._temp_ffuf_output_files:
+            try:
+                with open(file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for r in data.get("results", []):
+                        key = (r.get("status"), r.get("length"))
+                        if None not in key and key not in seen:
+                            seen.add(key)
+                            results.append(r)
+            except Exception:
+                pass
+
+        if results:
+            results.sort(key=lambda x: (x.get("status", 0), x.get("host", "")))
+            try:
+                with open(self.final_output_path + "_final.json", "w", encoding="utf-8") as f:
+                    json.dump({
+                        "results": results
+                    }, f, indent=4)
+            except Exception:
+                pass
+
+    def run_fuzzing(self):
+        ffuf_exec = self._check_ffuf()
+
+        if not self.static_wordlist_path:
+            self.static_wordlist_path = self._download_default_wordlist()
+
+        static_modes = os.path.isfile(self.static_wordlist_path) if self.static_wordlist_path else False
+        subdomain_mode = os.path.isfile(self.subdomain_wordlist_path) if self.subdomain_wordlist_path else False
+
+        if static_modes:
+            for mode in ["static", "static_append"]:
+                cmd, out = self._build_ffuf_command(mode, self.static_wordlist_path, ffuf_exec)
+                self._run_ffuf(cmd, out)
+
+        if subdomain_mode:
+            cmd, out = self._build_ffuf_command("subdomain", self.subdomain_wordlist_path, ffuf_exec)
+            self._run_ffuf(cmd, out)
+
+        self._consolidate_results()
+
+    def cleanup(self):
+        self._temp_ffuf_output_files = []
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Advanced Python script for Host Header Fuzzing with ffuf, filtering for HTTP 200 OK responses and checking for existing default wordlist.")
-    parser.add_argument("target_url", help="The target URL for fuzzing (e.g., https://example.com)")
-    parser.add_argument("--wordlist", default="https://raw.githubusercontent.com/cujanovic/Virtual-host-wordlist/master/virtual-host-wordlist.txt",
-                        help="The URL of the main wordlist file (default: https://raw.githubusercontent.com/cujanovic/Virtual-host-wordlist/master/virtual-host-wordlist.txt)")
-    parser.add_argument("--subdomains", help="Path to the file containing a list of subdomains (one per line)")
-
+    parser = argparse.ArgumentParser(description="Host Header Fuzzer using ffuf.")
+    parser.add_argument("-u", "--url", required=True, help="Target URL")
+    parser.add_argument("-sw", "--static-wordlist", help="Static wordlist path")
+    parser.add_argument("-dw", "--subdomain-wordlist", help="Subdomain wordlist path")
+    parser.add_argument("-mc", "--match-codes", default=DEFAULT_MATCH_CODES, help="Match status codes")
+    parser.add_argument("-o", "--output", help="Output file (without extension)")
+    parser.add_argument("--ffuf-path", default=DEFAULT_FFUF_PATH, help="Path to ffuf binary")
+    parser.add_argument("--ffuf-options", default="", help="Extra ffuf options")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
-    fuzzer = HostHeaderFuzzer(args.target_url, args.wordlist, args.subdomains)
-    fuzzer.run_fuzzing()
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    fuzzer = HostHeaderFuzzer(
+        target_url=args.url,
+        static_wordlist=args.static_wordlist,
+        subdomain_wordlist=args.subdomain_wordlist,
+        output_file=args.output,
+        ffuf_path=args.ffuf_path,
+        ffuf_options=args.ffuf_options,
+        match_codes=args.match_codes
+    )
+
+    try:
+        fuzzer.run_fuzzing()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        fuzzer.cleanup()
+
 
 if __name__ == "__main__":
     main()
